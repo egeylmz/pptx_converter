@@ -1,0 +1,8 @@
+PyQt5==5.15.10
+python-pptx==0.6.23
+moviepy==1.0.3
+gTTS==2.5.1
+deep-translator==1.11.4
+googletrans==4.0.0rc1
+Pillow==10.2.0
+
