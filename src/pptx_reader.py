@@ -4,35 +4,35 @@ from typing import List, Dict
 
 def extract_text_from_pptx(file_path: str) -> List[Dict]:
     """
-    PowerPoint dosyasından her slayttaki metinleri çıkarır.
-    
+    Extracts text from each slide in a PowerPoint file.
+
     Args:
-        file_path: PowerPoint dosyasının yolu
-        
+        file_path: Path to the PowerPoint file
+
     Returns:
-        Her slayt için dict içeren liste. Her dict:
+        List containing a dict for each slide. Each dict:
         {
             'slide_number': int,
-            'text': str (birleştirilmiş tüm metin),
-            'text_blocks': List[str] (paragraf paragraf metinler)
+            'text': str (all text combined),
+            'text_blocks': List[str] (text paragraph by paragraph)
         }
     """
     try:
         prs = Presentation(file_path)
         slides_data = []
-        
+
         for slide_num, slide in enumerate(prs.slides, start=1):
             text_blocks = []
             all_text = []
-            
-            # Her shape'i kontrol et (textbox, placeholder vb.)
+
+            # Check each shape (textbox, placeholder, etc.)
             for shape in slide.shapes:
                 if hasattr(shape, "text") and shape.text.strip():
                     text_content = shape.text.strip()
                     text_blocks.append(text_content)
                     all_text.append(text_content)
-            
-            # Metin varsa slayt verisine ekle
+
+            # If text exists, add to slide data
             if all_text:
                 slides_data.append({
                     'slide_number': slide_num,
@@ -40,25 +40,25 @@ def extract_text_from_pptx(file_path: str) -> List[Dict]:
                     'text_blocks': text_blocks
                 })
             else:
-                # Metin yoksa boş slayt olarak ekle
+                # If no text, add as empty slide
                 slides_data.append({
                     'slide_number': slide_num,
                     'text': '',
                     'text_blocks': []
                 })
-        
+
         return slides_data
-    
+
     except Exception as e:
-        raise Exception(f"PowerPoint dosyası okunurken hata oluştu: {str(e)}")
+        raise Exception(f"Error occurred while reading PowerPoint file: {str(e)}")
 
 
 def get_slide_count(file_path: str) -> int:
     """
-    PowerPoint dosyasındaki toplam slayt sayısını döndürür.
+    Returns the total number of slides in the PowerPoint file.
     """
     try:
         prs = Presentation(file_path)
         return len(prs.slides)
     except Exception as e:
-        raise Exception(f"PowerPoint dosyası okunurken hata oluştu: {str(e)}")
+        raise Exception(f"Error occurred while reading PowerPoint file: {str(e)}")

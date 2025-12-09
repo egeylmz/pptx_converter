@@ -5,61 +5,60 @@ from pathlib import Path
 
 def convert_ppt_to_pptx(ppt_file_path: str) -> str:
     """
-    Windows'ta .ppt dosyasını .pptx'e dönüştürür.
-    PowerPoint'in Windows COM interface'ini kullanır.
-    
+    Converts a .ppt file to .pptx on Windows.
+    Uses PowerPoint's Windows COM interface.
+
     Args:
-        ppt_file_path: .ppt dosyasının yolu
-        
+        ppt_file_path: Path to the .ppt file
+
     Returns:
-        Oluşturulan .pptx dosyasının yolu
-        
+        Path to the created .pptx file
+
     Raises:
-        Exception: Dönüştürme başarısız olursa
+        Exception: If conversion fails
     """
     try:
         import win32com.client
     except ImportError:
         raise Exception(
-            "PPT dönüştürme için pywin32 kurulu değil.\n"
-            "Kurulum için: pip install pywin32"
+            "pywin32 is not installed for PPT conversion.\n"
+            "To install: pip install pywin32"
         )
-    
-    # Geçici .pptx dosya yolu oluştur
+
+    # Create temporary .pptx file path
     ppt_path = Path(ppt_file_path)
     temp_dir = tempfile.gettempdir()
     pptx_file_path = os.path.join(temp_dir, f"converted_{ppt_path.stem}.pptx")
-    
+
     try:
-        # PowerPoint uygulamasını başlat
+        # Start PowerPoint application
         powerpoint = win32com.client.Dispatch("PowerPoint.Application")
-        powerpoint.Visible = 1  # Görünür mod (1) veya gizli mod (0)
-        
-        # .ppt dosyasını aç
+        powerpoint.Visible = 1  # Visible mode (1) or hidden mode (0)
+
+        # Open .ppt file
         presentation = powerpoint.Presentations.Open(os.path.abspath(ppt_file_path))
-        
-        # .pptx olarak kaydet
+
+        # Save as .pptx
         presentation.SaveAs(os.path.abspath(pptx_file_path), 24)  # 24 = ppSaveAsOpenXMLPresentation (.pptx)
-        
-        # Kapat
+
+        # Close
         presentation.Close()
         powerpoint.Quit()
-        
-        # PowerPoint COM objelerini temizle
+
+        # Clean up PowerPoint COM objects
         del presentation
         del powerpoint
-        
-        # Dosyanın oluşturulduğunu kontrol et
+
+        # Check if the file was created
         if os.path.exists(pptx_file_path):
             return pptx_file_path
         else:
-            raise Exception("Dönüştürülen dosya oluşturulamadı")
-            
+            raise Exception("Converted file could not be created")
+
     except Exception as e:
-        raise Exception(f"PPT'den PPTX'e dönüştürme hatası: {str(e)}")
+        raise Exception(f"Error converting PPT to PPTX: {str(e)}")
 
 
 def is_ppt_file(file_path: str) -> bool:
-    """Dosyanın .ppt formatında olup olmadığını kontrol eder."""
+    """Checks if the file is in .ppt format."""
     return os.path.splitext(file_path)[1].lower() == '.ppt'
-

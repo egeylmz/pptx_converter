@@ -2,15 +2,18 @@ import sys
 import os
 import json
 from datetime import datetime
+import threading
+import time
+
+import flet as ft
 
 if sys.platform == 'win32':
     import io
+
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QPushButton, QFileDialog, QLabel, QComboBox)
-from PyQt5.QtCore import Qt
+# --- IMPORT PLACEHOLDERS ---
 from pptx_reader import extract_text_from_pptx, get_slide_count
 from ppt_converter import convert_ppt_to_pptx, is_ppt_file
 from tts_generator import generate_audio_for_json
@@ -19,293 +22,452 @@ from video_generator import create_video_from_json
 TRANSLATOR_AVAILABLE = False
 try:
     from translator import translate_texts
+
     TRANSLATOR_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     TRANSLATOR_AVAILABLE = False
+
+
     def translate_texts(*args, **kwargs):
-        raise Exception("Çeviri özelliği Python 3.14 ile uyumlu değil. Python 3.11 veya 3.12 kullanmanız gerekiyor.")
+        raise Exception("Translation feature is not compatible with Python 3.14.")
 
 
-class PPTXConverterApp(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.selected_file = None
-        self.converted_pptx_file = None  # Geçici dönüştürülen .pptx dosyası
-        self.init_ui()
-    
-    def init_ui(self):
-        self.setWindowTitle('PowerPoint Video Converter')
-        self.setGeometry(100, 100, 1200, 600)
-        
-        # Ana widget ve layout
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout()
-        central_widget.setLayout(layout)
-        
-        # Başlık
-        title_label = QLabel('PowerPoint Video Converter')
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet("font-size: 40px; font-weight: bold; margin: 40px;")
-        layout.addWidget(title_label)
-        
-        # Dosya seçimi bölümü
-        file_label = QLabel('Seçili dosya: Dosya seçilmedi')
-        file_label.setWordWrap(True)
-        file_label.setStyleSheet("padding: 20px; border: 2px solid #ccc; margin: 20px; font-size: 18px;")
-        layout.addWidget(file_label)
-        self.file_label = file_label
-        
-        select_file_btn = QPushButton('PowerPoint Dosyası Seç')
-        select_file_btn.setStyleSheet("padding: 20px; font-size: 28px;")
-        select_file_btn.clicked.connect(self.select_file)
-        layout.addWidget(select_file_btn)
-        
-        # Dil seçimi bölümü
-        lang_label = QLabel('Hedef Dil:')
-        lang_label.setStyleSheet("font-size: 28px; margin-top: 40px;")
-        layout.addWidget(lang_label)
-        
-        lang_combo = QComboBox()
-        lang_combo.addItems([
-            'İngilizce (en)',
-            'Türkçe (tr)',
-            'Almanca (de)',
-            'Fransızca (fr)',
-            'İspanyolca (es)',
-            'İtalyanca (it)',
-            'Rusça (ru)',
-            'Japonca (ja)',
-            'Korece (ko)',
-            'Çince (zh)'
-        ])
-        lang_combo.setStyleSheet("padding: 16px; font-size: 28px;")
-        layout.addWidget(lang_combo)
-        self.lang_combo = lang_combo
-        
-        # İşleme butonu
-        process_btn = QPushButton('Dönüştürmeyi Başlat')
-        process_btn.setStyleSheet("padding: 24px; font-size: 32px; font-weight: bold; background-color: #4CAF50; color: white; margin-top: 40px;")
-        process_btn.clicked.connect(self.start_conversion)
-        layout.addWidget(process_btn)
-        
-        # Alt boşluk
-        layout.addStretch()
-    
-    def select_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            'PowerPoint Dosyası Seç',
-            '',
-            'PowerPoint Dosyaları (*.pptx);;Tüm Dosyalar (*)'
+def main(page: ft.Page):
+    # --- PAGE CONFIGURATION ---
+    page.title = "Presentation to Lecture"
+    page.padding = 0
+    page.window_width = 1100
+    page.window_height = 900
+    page.theme_mode = ft.ThemeMode.DARK
+    page.bgcolor = "#0F172A"  # Slate 900
+    page.fonts = {
+        "RobotoMono": "https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500&display=swap",
+        "Inter": "https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap"
+    }
+    page.theme = ft.Theme(font_family="Inter")
+
+    # --- STATE ---
+    selected_file = {"path": None, "converted_pptx": None}
+
+    # --- CONSTANTS & STYLES ---
+    # Dark Mode Palette
+    COLOR_BG_PAGE = "#0F172A"
+    COLOR_BG_CARD = "#1E293B"  # Slate 800
+    COLOR_BG_TERMINAL = "#020617"  # Slate 950
+
+    COLOR_PRIMARY = "#6366F1"  # Indigo 500 (Neon-ish)
+    COLOR_ACCENT = "#818CF8"  # Indigo 400
+
+    COLOR_TEXT_MAIN = "#F8FAFC"  # Slate 50
+    COLOR_TEXT_SUB = "#94A3B8"  # Slate 400
+
+    COLOR_SUCCESS = "#10B981"  # Emerald 500
+    COLOR_ERROR = "#EF4444"  # Red 500
+    COLOR_WARNING = "#F59E0B"  # Amber 500
+
+    language_map = {
+        'English': 'en', 'Turkish': 'tr', 'German': 'de', 'French': 'fr',
+        'Spanish': 'es', 'Italian': 'it', 'Russian': 'ru', 'Japanese': 'ja',
+        'Korean': 'ko', 'Chinese': 'zh'
+    }
+
+    # --- UI HELPERS ---
+
+    def add_log(message, color=COLOR_TEXT_SUB):
+        """Adds a message to the terminal console."""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_line = ft.Text(
+            f"[{timestamp}] > {message}",
+            font_family="RobotoMono",
+            size=12,
+            color=color,
+            selectable=True
         )
-        if file_path:
-            # Windows yol formatını normalize et
-            file_path = os.path.normpath(file_path)
-            
-            # .ppt dosyasıysa .pptx'e dönüştür
-            converted_file = None
-            if is_ppt_file(file_path):
-                try:
-                    self.file_label.setText('.ppt dosyası .pptx formatına dönüştürülüyor...\nLütfen bekleyin.')
-                    self.file_label.setStyleSheet("padding: 20px; border: 2px solid #ff9800; margin: 20px; background-color: #fff3e0; font-size: 18px;")
-                    
-                    # GUI'yi güncellemek için
-                    QApplication.processEvents()
-                    
-                    converted_file = convert_ppt_to_pptx(file_path)
-                    file_path = converted_file  # Dönüştürülen dosyayı kullan
-                    self.file_label.setText('.ppt dosyası başarıyla dönüştürüldü!')
-                except Exception as e:
-                    error_msg = (
-                        f'.ppt dosyası dönüştürülemedi!\n\n'
-                        f'Hata: {str(e)}\n\n'
-                        'Lütfen:\n'
-                        '1. PowerPoint\'in yüklü olduğundan emin olun\n'
-                        '2. veya dosyayı manuel olarak .pptx\'e dönüştürün'
-                    )
-                    self.file_label.setText(error_msg)
-                    self.file_label.setStyleSheet("padding: 20px; border: 2px solid #f44336; margin: 20px; background-color: #ffebee; font-size: 18px;")
-                    return
-            
-            # Dosyanın var olup olmadığını kontrol et
-            if not os.path.exists(file_path):
-                self.file_label.setText(f'Hata: Dosya bulunamadı:\n{file_path}')
-                self.file_label.setStyleSheet("padding: 10px; border: 1px solid #f44336; margin: 10px; background-color: #ffebee;")
-                return
-            
-            try:
-                slide_count = get_slide_count(file_path)
-                self.selected_file = file_path  # Dönüştürülmüş veya orijinal dosya yolunu kullan
-                # Orijinal dosya adını göster (eğer dönüştürüldüyse)
-                original_file = os.path.basename(file_path) if converted_file is None else os.path.basename(converted_file).replace('converted_', '').replace('.pptx', '.ppt')
-                status_text = f'Seçili dosya: {original_file}\nToplam {slide_count} slayt bulundu.'
-                if converted_file:
-                    status_text += '\n(Geçici olarak .pptx formatına dönüştürüldü)'
-                self.file_label.setText(status_text)
-                self.file_label.setStyleSheet("padding: 20px; border: 2px solid #4CAF50; margin: 20px; background-color: #e8f5e9; font-size: 18px;")
-                
-                # Dönüştürülen dosyayı sakla (sonra silmek için)
-                if converted_file:
-                    self.converted_pptx_file = converted_file
-            except Exception as e:
-                error_msg = str(e)
-                # Daha kullanıcı dostu hata mesajı
-                if 'Package not found' in error_msg or '.ppt' in file_path.lower():
-                    error_msg = (
-                        'PowerPoint dosyası açılamadı!\n\n'
-                        'Olası nedenler:\n'
-                        '• Dosya .ppt formatında (sadece .pptx desteklenir)\n'
-                        '• Dosya bozuk veya korumalı\n'
-                        '• Dosya başka bir program tarafından açık'
-                    )
-                else:
-                    error_msg = f'Hata: {error_msg}'
-                
-                self.file_label.setText(error_msg)
-                self.file_label.setStyleSheet("padding: 20px; border: 2px solid #f44336; margin: 20px; background-color: #ffebee; font-size: 18px;")
-                print(f"Detaylı hata: {e}")
-                import traceback
-                traceback.print_exc()
-    
-    def update_translation_progress(self, message: str):
-        """Çeviri ilerlemesini güncelle"""
-        self.file_label.setText(message)
-        QApplication.processEvents()  # UI'ı anında güncelle
-    
-    def start_conversion(self):
-        if not self.selected_file:
-            self.file_label.setText('Lütfen önce bir dosya seçin!')
-            self.file_label.setStyleSheet("padding: 20px; border: 2px solid #f44336; margin: 20px; background-color: #ffebee; font-size: 18px;")
+        terminal_list.controls.append(log_line)
+        terminal_list.update()
+        # Auto-scroll to bottom
+        terminal_list.scroll_to(offset=-1, duration=100)
+
+    def update_status(message, style="info"):
+        """Updates the status pill."""
+        styles = {
+            "info": {"color": COLOR_ACCENT, "bg": "#1E1B4B", "icon": ft.Icons.INFO_OUTLINE},  # Dark Indigo bg
+            "success": {"color": COLOR_SUCCESS, "bg": "#064E3B", "icon": ft.Icons.CHECK_CIRCLE_OUTLINE},
+            # Dark Green bg
+            "warning": {"color": COLOR_WARNING, "bg": "#451A03", "icon": ft.Icons.WARNING_AMBER_ROUNDED},
+            # Dark Orange bg
+            "error": {"color": COLOR_ERROR, "bg": "#450A0A", "icon": ft.Icons.ERROR_OUTLINE},  # Dark Red bg
+        }
+
+        s = styles.get(style, styles["info"])
+
+        status_icon.name = s["icon"]
+        status_icon.color = s["color"]
+        status_text.value = message
+        status_text.color = s["color"]
+
+        # Use simple color assignment
+        status_container.bgcolor = s["bg"]
+        status_container.border = ft.border.all(1, s["color"])
+        status_container.visible = True
+        status_container.update()
+
+        # Also log it
+        add_log(message, s["color"])
+
+    # --- FILE PICKER LOGIC ---
+
+    def on_file_result(e: ft.FilePickerResultEvent):
+        if not e.files:
             return
-        
-        selected_lang = self.lang_combo.currentText()
-        lang_code = selected_lang.split('(')[1].split(')')[0]
-        
+
+        file_path = os.path.normpath(e.files[0].path)
+        converted_file = None
+
+        # Reset UI
+        upload_icon.name = ft.Icons.INSERT_DRIVE_FILE
+        upload_text.value = "Analyzing File..."
+        upload_subtext.value = "Checking compatibility..."
+        upload_container.update()
+
+        terminal_list.controls.clear()
+        add_log(f"File selected: {file_path}", COLOR_TEXT_MAIN)
+
+        if is_ppt_file(file_path):
+            try:
+                update_status('Converting old .ppt format...', "warning")
+                converted_file = convert_ppt_to_pptx(file_path)
+                file_path = converted_file
+                add_log("Legacy .ppt file converted to .pptx", COLOR_SUCCESS)
+            except Exception as ex:
+                update_status(f"Conversion Error: {str(ex)}", "error")
+                reset_upload_ui()
+                return
+
+        if not os.path.exists(file_path):
+            update_status(f'Error: File not found', "error")
+            reset_upload_ui()
+            return
+
         try:
-            # PowerPoint dosyasından metinleri çıkar
-            print(f'Dosya: {self.selected_file}')
-            print(f'Dil: {lang_code}')
-            print('PowerPoint dosyası okunuyor...')
-            slides_data = extract_text_from_pptx(self.selected_file)
-            print(f'{len(slides_data)} slayt okundu.')
-            
-            # Metinleri çevir
-            if not TRANSLATOR_AVAILABLE:
-                self.file_label.setText('Uyarı: Çeviri modülü kullanılamıyor. Sadece okuma yapılıyor.')
-                self.file_label.setStyleSheet("padding: 20px; border: 2px solid #ff9800; margin: 20px; background-color: #fff3e0; font-size: 18px;")
-                translated_slides = slides_data
+            slide_count = get_slide_count(file_path)
+            selected_file["path"] = file_path
+            selected_file["converted_pptx"] = converted_file
+
+            # Update Upload UI to "Selected" State
+            file_name = os.path.basename(file_path)
+            upload_icon.name = ft.Icons.CHECK_CIRCLE
+            upload_icon.color = COLOR_SUCCESS
+            upload_text.value = file_name
+            upload_text.color = COLOR_SUCCESS
+            upload_subtext.value = f"{slide_count} Slides Found"
+
+            upload_container.border = ft.border.all(2, COLOR_SUCCESS)
+            upload_container.bgcolor = "#064E3B"  # Dark Green
+            upload_container.update()
+
+            add_log(f"Ready to process {slide_count} slides.", COLOR_SUCCESS)
+
+            convert_btn.disabled = False
+            convert_btn.style.bgcolor = COLOR_PRIMARY
+            convert_btn.content.color = "#FFFFFF"
+            convert_btn.update()
+
+        except Exception as ex:
+            error_msg = str(ex)
+            update_status(f"Error: {error_msg}", "error")
+            reset_upload_ui()
+
+    def reset_upload_ui():
+        upload_icon.name = ft.Icons.CLOUD_UPLOAD_OUTLINED
+        upload_icon.color = COLOR_PRIMARY
+        upload_text.value = "Drop File or Click"
+        upload_text.color = COLOR_TEXT_MAIN
+        upload_subtext.value = ".pptx or .ppt files supported"
+        upload_container.border = ft.border.all(1, "#334155")  # Slate 700
+        upload_container.bgcolor = "#0F172A"  # Darker inner bg
+        upload_container.update()
+
+    file_picker = ft.FilePicker(on_result=on_file_result)
+    page.overlay.append(file_picker)
+
+    # --- CONVERSION LOGIC ---
+
+    def start_conversion_thread():
+        if not selected_file["path"]:
+            return
+
+        lang_code = language_map[lang_dropdown.value]
+
+        # UI: Locking
+        convert_btn.disabled = True
+        convert_btn.text = "PROCESSING..."
+        convert_btn.update()
+
+        terminal_container.visible = True
+        terminal_container.update()
+
+        result_container.visible = False
+        result_container.update()
+
+        try:
+            # 1. Extract
+            add_log('Reading PowerPoint data...', COLOR_ACCENT)
+            slides_data = extract_text_from_pptx(selected_file["path"])
+            add_log(f"Extracted text from {len(slides_data)} slides.")
+
+            # 2. Translate
+            if TRANSLATOR_AVAILABLE:
+                add_log(f'Initializing translation engine ({lang_code})...', COLOR_ACCENT)
+                translated_slides = translate_texts(
+                    slides_data, lang_code,
+                    progress_callback=lambda msg: add_log(msg)
+                )
             else:
-                print(f'Metinler {lang_code} diline çevriliyor...')
-                self.file_label.setText('Metinler çevriliyor... Lütfen bekleyin.')
-                QApplication.processEvents()  # UI'ı güncelle
-                translated_slides = translate_texts(slides_data, lang_code, progress_callback=lambda msg: self.update_translation_progress(msg))
-                print(f'{len(translated_slides)} slayt çevrildi.')
-            
-            # Çevrilen verileri JSON dosyasına kaydet
+                translated_slides = slides_data
+                add_log("Translation module missing. Skipping translation.", COLOR_WARNING)
+
+            # 3. JSON Save
+            output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+            os.makedirs(output_dir, exist_ok=True)
+
+            source_filename = os.path.splitext(os.path.basename(selected_file["path"]))[0]
+            json_filename = f"{source_filename}_{lang_code}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            json_filepath = os.path.join(output_dir, json_filename)
+
             output_data = {
-                "source_file": os.path.basename(self.selected_file),
+                "source_file": os.path.basename(selected_file["path"]),
                 "target_language": lang_code,
                 "translation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "total_slides": len(translated_slides),
-                "slides": [
-                    {
-                        "slide_number": slide.get("slide_number"),
-                        "original_text": slide.get("text", ""),
-                        "translated_text": slide.get("translated_text", ""),
-                        "original_blocks": slide.get("text_blocks", []),
-                        "translated_blocks": slide.get("translated_blocks", []),
-                        "audio_file": None,  # TTS'den sonra buraya eklenecek
-                        "duration": None  # Ses dosyası süresi
-                    }
-                    for slide in translated_slides
-                ]
+                "slides": [{"slide_number": s.get("slide_number"), "original_text": s.get("text", ""),
+                            "translated_text": s.get("translated_text", "")} for s in translated_slides]
             }
-            
-            # output klasörünü oluştur (yoksa)
-            output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # JSON dosya adını oluştur
-            source_filename = os.path.splitext(os.path.basename(self.selected_file))[0]
-            json_filename = f"{source_filename}_{lang_code}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            json_filepath = os.path.join(output_dir, json_filename)
-            
-            # JSON dosyasına kaydet
+
             with open(json_filepath, 'w', encoding='utf-8') as f:
                 json.dump(output_data, f, ensure_ascii=False, indent=2)
-            
-            print(f'Çevrilen veriler kaydedildi: {json_filepath}')
-            
-            # TTS işlemini başlat
-            self.file_label.setText('Ses dosyaları oluşturuluyor... Lütfen bekleyin.')
-            QApplication.processEvents()
-            try:
-                audio_json_path = generate_audio_for_json(
-                    json_filepath, 
-                    progress_callback=lambda msg: self.update_translation_progress(msg)
-                )
-                print(f'Audio JSON kaydedildi: {audio_json_path}')
-                
-                # Video oluşturmayı başlat
-                self.file_label.setText('Video oluşturuluyor... Bu işlem uzun sürebilir. Lütfen bekleyin.')
-                QApplication.processEvents()
-                
-                try:
-                    video_path = create_video_from_json(
-                        audio_json_path,
-                        self.selected_file,
-                        progress_callback=lambda msg: self.update_translation_progress(msg)
-                    )
-                    print(f'Video oluşturuldu: {video_path}')
-                    
-                    success_msg = (
-                        f'✓ TÜM İŞLEMLER TAMAMLANDI!\n\n'
-                        f'{len(translated_slides)} slayt çevrildi, ses dosyaları ve video oluşturuldu.\n\n'
-                        f'JSON: {os.path.basename(json_filepath)}\n'
-                        f'Audio JSON: {os.path.basename(audio_json_path)}\n'
-                        f'Video: {os.path.basename(video_path)}'
-                    )
-                    self.file_label.setText(success_msg)
-                    self.file_label.setStyleSheet("padding: 20px; border: 2px solid #4CAF50; margin: 20px; background-color: #e8f5e9; font-size: 18px;")
-                except Exception as video_error:
-                    print(f'Video hatası: {video_error}')
-                    import traceback
-                    traceback.print_exc()
-                    # Video hatası olsa bile TTS başarılı mesajı göster
-                    success_msg = (
-                        f'✓ Çeviri ve TTS tamamlandı!\n\n'
-                        f'{len(translated_slides)} slayt çevrildi ve ses dosyaları oluşturuldu.\n\n'
-                        f'Video hatası: {str(video_error)}\n\n'
-                        f'JSON: {os.path.basename(json_filepath)}\n'
-                        f'Audio JSON: {os.path.basename(audio_json_path)}'
-                    )
-                    self.file_label.setText(success_msg)
-                    self.file_label.setStyleSheet("padding: 20px; border: 2px solid #ff9800; margin: 20px; background-color: #fff3e0; font-size: 18px;")
-            except Exception as tts_error:
-                print(f'TTS hatası: {tts_error}')
-                import traceback
-                traceback.print_exc()
-                # TTS hatası olsa bile çeviri başarılı mesajı göster
-                success_msg = (
-                    f'Çeviri tamamlandı! {len(translated_slides)} slayt çevrildi.\n\n'
-                    f'TTS hatası: {str(tts_error)}\n\n'
-                    f'Kayıt yeri: {json_filename}'
-                )
-                self.file_label.setText(success_msg)
-                self.file_label.setStyleSheet("padding: 20px; border: 2px solid #ff9800; margin: 20px; background-color: #fff3e0; font-size: 18px;")
+            add_log(f"Data saved to {json_filename}")
+
+            # 4. TTS & Video
+            add_log('Starting Audio Generation (TTS)...', COLOR_ACCENT)
+            audio_json_path = generate_audio_for_json(json_filepath, progress_callback=lambda msg: add_log(msg))
+
+            add_log('Rendering Video (FFmpeg)...', COLOR_ACCENT)
+            video_path = create_video_from_json(audio_json_path, selected_file["path"],
+                                                progress_callback=lambda msg: add_log(msg))
+
+            # Success UI
+            update_status("Task Complete!", "success")
+
+            result_filename.value = os.path.basename(video_path)
+            result_path.value = video_path
+            result_container.visible = True
+            result_container.update()
+
         except Exception as e:
-            self.file_label.setText(f'Dönüştürme hatası: {str(e)}')
-            self.file_label.setStyleSheet("padding: 20px; border: 2px solid #f44336; margin: 20px; background-color: #ffebee; font-size: 18px;")
+            import traceback
+            traceback.print_exc()
+            update_status(f"Critical Error: {str(e)}", "error")
+            add_log(str(e), COLOR_ERROR)
+        finally:
+            convert_btn.disabled = False
+            convert_btn.text = "START CONVERSION"
+            page.update()
 
+    def start_conversion(e):
+        threading.Thread(target=start_conversion_thread, daemon=True).start()
 
-def main():
-    app = QApplication(sys.argv)
-    window = PPTXConverterApp()
-    window.show()
-    sys.exit(app.exec_())
+    # ==================== CONTROLS & LAYOUT ====================
+
+    # 1. Header
+    header = ft.Container(
+        content=ft.Row([
+            ft.Icon(ft.Icons.AUTO_AWESOME_MOTION, color=COLOR_PRIMARY, size=35),
+            ft.Column([
+                ft.Text("PPTX TO VIDEO", size=24, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_MAIN,
+                        font_family="Inter"),
+                ft.Text("AI-Powered Conversion Suite", size=12, color=COLOR_TEXT_SUB, font_family="RobotoMono"),
+            ], spacing=2)
+        ], alignment=ft.MainAxisAlignment.CENTER),
+        padding=ft.padding.only(bottom=20)
+    )
+
+    # 2. Upload Area (Animated with Hover)
+    upload_icon = ft.Icon(ft.Icons.CLOUD_UPLOAD_OUTLINED, size=50, color=COLOR_PRIMARY)
+    upload_text = ft.Text("Drop File or Click", size=16, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_MAIN)
+    upload_subtext = ft.Text(".pptx or .ppt files supported", size=12, color=COLOR_TEXT_SUB)
+
+    def on_hover_upload(e):
+        e.control.scale = 1.02 if e.data == "true" else 1.0
+        e.control.border = ft.border.all(1, COLOR_PRIMARY if e.data == "true" else "#334155")
+        e.control.update()
+
+    upload_container = ft.Container(
+        content=ft.Column(
+            [upload_icon, upload_text, upload_subtext],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            alignment=ft.MainAxisAlignment.CENTER,
+            spacing=8
+        ),
+        padding=40,
+        bgcolor="#0F172A",  # Darker inset
+        border=ft.border.all(1, "#334155"),  # Slate 700
+        border_radius=16,
+        ink=True,
+        on_click=lambda _: file_picker.pick_files(allowed_extensions=["pptx", "ppt"]),
+        on_hover=on_hover_upload,
+        animate_scale=ft.Animation(200, "easeOut"),
+        height=200,
+        width=550,
+        alignment=ft.alignment.center
+    )
+
+    # 3. Settings (Dropdown)
+    lang_dropdown = ft.Dropdown(
+        label="Target Language",
+        options=[ft.dropdown.Option(l) for l in language_map.keys()],
+        value="English",
+        width=550,
+        bgcolor="#0F172A",
+        border_color="#334155",
+        color=COLOR_TEXT_MAIN,
+        focused_border_color=COLOR_PRIMARY,
+        content_padding=18,
+        text_size=15
+    )
+
+    # 4. Action Button (Cyberpunk Style)
+    convert_btn = ft.ElevatedButton(
+        content=ft.Row(
+            [ft.Icon(ft.Icons.PLAY_ARROW_ROUNDED), ft.Text("START CONVERSION", weight=ft.FontWeight.BOLD)],
+            alignment=ft.MainAxisAlignment.CENTER
+        ),
+        style=ft.ButtonStyle(
+            color="#94A3B8",  # Dimmed text when disabled
+            bgcolor={ft.ControlState.DISABLED: "#1E293B", "": COLOR_PRIMARY},
+            shape=ft.RoundedRectangleBorder(radius=8),
+            padding=22,
+        ),
+        width=550,
+        disabled=True,
+        on_click=start_conversion
+    )
+
+    # 5. Terminal / Logs Console (The "Cool" Feature)
+    terminal_list = ft.ListView(
+        expand=True,
+        spacing=2,
+        auto_scroll=True,
+        padding=10
+    )
+
+    terminal_container = ft.Container(
+        content=ft.Column([
+            ft.Container(
+                content=ft.Text("TERMINAL OUTPUT", size=10, weight=ft.FontWeight.BOLD, color="#475569"),
+                padding=ft.padding.only(left=10, top=5)
+            ),
+            terminal_list
+        ]),
+        bgcolor=COLOR_BG_TERMINAL,
+        border_radius=8,
+        border=ft.border.all(1, "#334155"),
+        width=550,
+        height=150,
+        visible=False
+    )
+
+    # 6. Status Pill
+    status_icon = ft.Icon(ft.Icons.INFO_OUTLINE, size=18)
+    status_text = ft.Text("", size=13, weight=ft.FontWeight.W_500)
+    status_container = ft.Container(
+        content=ft.Row([status_icon, status_text], alignment=ft.MainAxisAlignment.CENTER),
+        padding=12,
+        border_radius=50,
+        visible=False,
+        width=550
+    )
+
+    # 7. Result Card
+    result_filename = ft.Text("", weight=ft.FontWeight.BOLD, size=15, color=COLOR_TEXT_MAIN, font_family="RobotoMono")
+    result_path = ft.Text("", size=11, color=COLOR_TEXT_SUB, selectable=True)
+
+    result_container = ft.Container(
+        content=ft.Column([
+            ft.Icon(ft.Icons.ROCKET_LAUNCH_ROUNDED, color=COLOR_SUCCESS, size=40),
+            ft.Text("RENDERING COMPLETE", size=16, weight=ft.FontWeight.BOLD, color=COLOR_SUCCESS, font_family="Inter"),
+            ft.Divider(height=20, color="transparent"),
+            result_filename,
+            ft.Container(height=5),
+            ft.ElevatedButton(
+                "OPEN FOLDER",
+                icon=ft.Icons.FOLDER_OPEN,
+                on_click=lambda _: os.startfile(
+                    os.path.dirname(result_path.value)) if sys.platform == 'win32' else None,
+                style=ft.ButtonStyle(
+                    color=COLOR_SUCCESS,
+                    bgcolor="#064E3B",
+                    shape=ft.RoundedRectangleBorder(radius=8)
+                )
+            )
+        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+        # FIX: Hardcoded ARGB Hex for opacity (10% of #10B981) -> #1A10B981
+        bgcolor="#1A10B981",
+        border=ft.border.all(1, COLOR_SUCCESS),
+        border_radius=12,
+        padding=25,
+        width=550,
+        visible=False
+    )
+
+    # --- MAIN LAYOUT ASSEMBLY ---
+
+    # Glassmorphism Card
+    main_card = ft.Container(
+        content=ft.Column(
+            [
+                header,
+                ft.Divider(height=20, color="transparent"),
+                upload_container,
+                ft.Divider(height=20, color="transparent"),
+                lang_dropdown,
+                ft.Divider(height=10, color="transparent"),
+                convert_btn,
+                ft.Divider(height=20, color="transparent"),
+                status_container,
+                ft.Divider(height=10, color="transparent"),
+                terminal_container,
+                ft.Divider(height=10, color="transparent"),
+                result_container
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            scroll=ft.ScrollMode.HIDDEN
+        ),
+        # FIX: Hardcoded ARGB Hex for opacity (85% of #1E293B) -> #D91E293B
+        bgcolor="#D91E293B",
+        blur=ft.Blur(10, 10, ft.BlurTileMode.MIRROR),
+        padding=40,
+        border_radius=20,
+        border=ft.border.all(1, "#334155"),
+        shadow=ft.BoxShadow(
+            spread_radius=0,
+            blur_radius=20,
+            color="#000000",
+            offset=ft.Offset(0, 10)
+        ),
+        width=700,
+        alignment=ft.alignment.center
+    )
+
+    page.add(
+        ft.Container(
+            content=main_card,
+            alignment=ft.alignment.center,
+            expand=True,
+            bgcolor=COLOR_BG_PAGE
+        )
+    )
 
 
 if __name__ == '__main__':
-    main()
-
+    ft.app(target=main)
