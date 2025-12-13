@@ -7,30 +7,38 @@ import time
 
 import flet as ft
 
+# --- WINDOWS CONSOLE FIX ---
 if sys.platform == 'win32':
     import io
-
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # --- IMPORT PLACEHOLDERS ---
-from pptx_reader import extract_text_from_pptx, get_slide_count
-from ppt_converter import convert_ppt_to_pptx, is_ppt_file
-from tts_generator import generate_audio_for_json
-from video_generator import create_video_from_json
+# Ensure these files (pptx_reader.py, ppt_converter.py, etc.) exist in your directory
+try:
+    from pptx_reader import extract_text_from_pptx, get_slide_count
+    from ppt_converter import convert_ppt_to_pptx, is_ppt_file
+    from tts_generator import generate_audio_for_json
+    from video_generator import create_video_from_json
+except ImportError as e:
+    print(f"Warning: Backend modules not found ({e}). GUI will load but conversion will fail.")
+    # Mock functions to prevent immediate crash if files are missing during UI testing
+    def extract_text_from_pptx(path): return []
+    def get_slide_count(path): return 0
+    def convert_ppt_to_pptx(path): return path
+    def is_ppt_file(path): return False
+    def generate_audio_for_json(path, progress_callback=None): return path
+    def create_video_from_json(path, video_path, progress_callback=None): return path
 
+# --- OPTIONAL TRANSLATOR ---
 TRANSLATOR_AVAILABLE = False
 try:
     from translator import translate_texts
-
     TRANSLATOR_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     TRANSLATOR_AVAILABLE = False
-
-
     def translate_texts(*args, **kwargs):
-        raise Exception("Translation feature is not compatible with Python 3.14.")
-
+        raise Exception("Translation feature is not available (module missing).")
 
 def main(page: ft.Page):
     # --- PAGE CONFIGURATION ---
@@ -50,20 +58,19 @@ def main(page: ft.Page):
     selected_file = {"path": None, "converted_pptx": None}
 
     # --- CONSTANTS & STYLES ---
-    # Dark Mode Palette
     COLOR_BG_PAGE = "#0F172A"
     COLOR_BG_CARD = "#1E293B"  # Slate 800
     COLOR_BG_TERMINAL = "#020617"  # Slate 950
 
-    COLOR_PRIMARY = "#6366F1"  # Indigo 500 (Neon-ish)
-    COLOR_ACCENT = "#818CF8"  # Indigo 400
+    COLOR_PRIMARY = "#6366F1"  # Indigo 500
+    COLOR_ACCENT = "#818CF8"   # Indigo 400
 
-    COLOR_TEXT_MAIN = "#F8FAFC"  # Slate 50
+    COLOR_TEXT_MAIN = "#F8FAFC" # Slate 50
     COLOR_TEXT_SUB = "#94A3B8"  # Slate 400
 
-    COLOR_SUCCESS = "#10B981"  # Emerald 500
-    COLOR_ERROR = "#EF4444"  # Red 500
-    COLOR_WARNING = "#F59E0B"  # Amber 500
+    COLOR_SUCCESS = "#10B981"   # Emerald 500
+    COLOR_ERROR = "#EF4444"     # Red 500
+    COLOR_WARNING = "#F59E0B"   # Amber 500
 
     language_map = {
         'English': 'en', 'Turkish': 'tr', 'German': 'de', 'French': 'fr',
@@ -85,18 +92,15 @@ def main(page: ft.Page):
         )
         terminal_list.controls.append(log_line)
         terminal_list.update()
-        # Auto-scroll to bottom
         terminal_list.scroll_to(offset=-1, duration=100)
 
     def update_status(message, style="info"):
         """Updates the status pill."""
         styles = {
-            "info": {"color": COLOR_ACCENT, "bg": "#1E1B4B", "icon": ft.Icons.INFO_OUTLINE},  # Dark Indigo bg
+            "info": {"color": COLOR_ACCENT, "bg": "#1E1B4B", "icon": ft.Icons.INFO_OUTLINE},
             "success": {"color": COLOR_SUCCESS, "bg": "#064E3B", "icon": ft.Icons.CHECK_CIRCLE_OUTLINE},
-            # Dark Green bg
             "warning": {"color": COLOR_WARNING, "bg": "#451A03", "icon": ft.Icons.WARNING_AMBER_ROUNDED},
-            # Dark Orange bg
-            "error": {"color": COLOR_ERROR, "bg": "#450A0A", "icon": ft.Icons.ERROR_OUTLINE},  # Dark Red bg
+            "error": {"color": COLOR_ERROR, "bg": "#450A0A", "icon": ft.Icons.ERROR_OUTLINE},
         }
 
         s = styles.get(style, styles["info"])
@@ -106,14 +110,49 @@ def main(page: ft.Page):
         status_text.value = message
         status_text.color = s["color"]
 
-        # Use simple color assignment
         status_container.bgcolor = s["bg"]
         status_container.border = ft.border.all(1, s["color"])
         status_container.visible = True
         status_container.update()
 
-        # Also log it
         add_log(message, s["color"])
+
+    def reset_all_ui():
+        """Resets entire UI to initial state for a new conversion."""
+        selected_file["path"] = None
+        selected_file["converted_pptx"] = None
+
+        # Reset upload container
+        upload_icon.name = ft.Icons.CLOUD_UPLOAD_OUTLINED
+        upload_icon.color = COLOR_PRIMARY
+        upload_text.value = "Drop File or Click"
+        upload_text.color = COLOR_TEXT_MAIN
+        upload_subtext.value = ".pptx or .ppt files supported"
+        upload_container.border = ft.border.all(1, "#334155")
+        upload_container.bgcolor = "#0F172A"
+        upload_container.update()
+
+        # Reset convert button
+        convert_btn.disabled = True
+        convert_btn.content.controls[1].value = "START CONVERSION"
+        convert_btn.style.bgcolor = {ft.ControlState.DISABLED: "#1E293B", "": COLOR_PRIMARY}
+        convert_btn.content.color = "#94A3B8"
+        convert_btn.update()
+
+        # Hide sections
+        terminal_list.controls.clear()
+        terminal_container.visible = False
+        terminal_container.update()
+
+        status_container.visible = False
+        status_container.update()
+
+        result_container.visible = False
+        result_container.update()
+
+        lang_dropdown.value = "English"
+        lang_dropdown.update()
+        page.update()
 
     # --- FILE PICKER LOGIC ---
 
@@ -163,7 +202,7 @@ def main(page: ft.Page):
             upload_subtext.value = f"{slide_count} Slides Found"
 
             upload_container.border = ft.border.all(2, COLOR_SUCCESS)
-            upload_container.bgcolor = "#064E3B"  # Dark Green
+            upload_container.bgcolor = "#064E3B"
             upload_container.update()
 
             add_log(f"Ready to process {slide_count} slides.", COLOR_SUCCESS)
@@ -184,8 +223,8 @@ def main(page: ft.Page):
         upload_text.value = "Drop File or Click"
         upload_text.color = COLOR_TEXT_MAIN
         upload_subtext.value = ".pptx or .ppt files supported"
-        upload_container.border = ft.border.all(1, "#334155")  # Slate 700
-        upload_container.bgcolor = "#0F172A"  # Darker inner bg
+        upload_container.border = ft.border.all(1, "#334155")
+        upload_container.bgcolor = "#0F172A"
         upload_container.update()
 
     file_picker = ft.FilePicker(on_result=on_file_result)
@@ -201,7 +240,7 @@ def main(page: ft.Page):
 
         # UI: Locking
         convert_btn.disabled = True
-        convert_btn.text = "PROCESSING..."
+        convert_btn.content.controls[1].value = "PROCESSING..."
         convert_btn.update()
 
         terminal_container.visible = True
@@ -228,7 +267,7 @@ def main(page: ft.Page):
                 add_log("Translation module missing. Skipping translation.", COLOR_WARNING)
 
             # 3. JSON Save
-            output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+            output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
             os.makedirs(output_dir, exist_ok=True)
 
             source_filename = os.path.splitext(os.path.basename(selected_file["path"]))[0]
@@ -240,8 +279,18 @@ def main(page: ft.Page):
                 "target_language": lang_code,
                 "translation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "total_slides": len(translated_slides),
-                "slides": [{"slide_number": s.get("slide_number"), "original_text": s.get("text", ""),
-                            "translated_text": s.get("translated_text", "")} for s in translated_slides]
+                "slides": [
+                    {
+                        "slide_number": slide.get("slide_number"),
+                        "original_text": slide.get("text", ""),
+                        "translated_text": slide.get("translated_text", ""),
+                        "original_blocks": slide.get("text_blocks", []),
+                        "translated_blocks": slide.get("translated_blocks", []),
+                        "audio_file": None,
+                        "duration": None
+                    }
+                    for slide in translated_slides
+                ]
             }
 
             with open(json_filepath, 'w', encoding='utf-8') as f:
@@ -264,17 +313,31 @@ def main(page: ft.Page):
             result_container.visible = True
             result_container.update()
 
+            # Enable the "New Conversion" button
+            convert_btn.disabled = False
+            convert_btn.content.controls[1].value = "NEW CONVERSION"
+            convert_btn.content.controls[0].name = ft.Icons.REFRESH
+            convert_btn.update()
+
         except Exception as e:
             import traceback
             traceback.print_exc()
             update_status(f"Critical Error: {str(e)}", "error")
             add_log(str(e), COLOR_ERROR)
-        finally:
+
+            # On error, also allow retry
             convert_btn.disabled = False
-            convert_btn.text = "START CONVERSION"
-            page.update()
+            convert_btn.content.controls[1].value = "RETRY"
+            convert_btn.update()
 
     def start_conversion(e):
+        # Check if button says "NEW CONVERSION" or "RETRY" - if so, reset UI
+        button_text = convert_btn.content.controls[1].value
+        if button_text in ["NEW CONVERSION", "RETRY"]:
+            reset_all_ui()
+            return
+
+        # Otherwise start normal conversion
         threading.Thread(target=start_conversion_thread, daemon=True).start()
 
     # ==================== CONTROLS & LAYOUT ====================
@@ -292,7 +355,7 @@ def main(page: ft.Page):
         padding=ft.padding.only(bottom=20)
     )
 
-    # 2. Upload Area (Animated with Hover)
+    # 2. Upload Area
     upload_icon = ft.Icon(ft.Icons.CLOUD_UPLOAD_OUTLINED, size=50, color=COLOR_PRIMARY)
     upload_text = ft.Text("Drop File or Click", size=16, weight=ft.FontWeight.BOLD, color=COLOR_TEXT_MAIN)
     upload_subtext = ft.Text(".pptx or .ppt files supported", size=12, color=COLOR_TEXT_SUB)
@@ -310,8 +373,8 @@ def main(page: ft.Page):
             spacing=8
         ),
         padding=40,
-        bgcolor="#0F172A",  # Darker inset
-        border=ft.border.all(1, "#334155"),  # Slate 700
+        bgcolor="#0F172A",
+        border=ft.border.all(1, "#334155"),
         border_radius=16,
         ink=True,
         on_click=lambda _: file_picker.pick_files(allowed_extensions=["pptx", "ppt"]),
@@ -322,7 +385,7 @@ def main(page: ft.Page):
         alignment=ft.alignment.center
     )
 
-    # 3. Settings (Dropdown)
+    # 3. Settings
     lang_dropdown = ft.Dropdown(
         label="Target Language",
         options=[ft.dropdown.Option(l) for l in language_map.keys()],
@@ -336,14 +399,14 @@ def main(page: ft.Page):
         text_size=15
     )
 
-    # 4. Action Button (Cyberpunk Style)
+    # 4. Action Button
     convert_btn = ft.ElevatedButton(
         content=ft.Row(
             [ft.Icon(ft.Icons.PLAY_ARROW_ROUNDED), ft.Text("START CONVERSION", weight=ft.FontWeight.BOLD)],
             alignment=ft.MainAxisAlignment.CENTER
         ),
         style=ft.ButtonStyle(
-            color="#94A3B8",  # Dimmed text when disabled
+            color="#94A3B8",
             bgcolor={ft.ControlState.DISABLED: "#1E293B", "": COLOR_PRIMARY},
             shape=ft.RoundedRectangleBorder(radius=8),
             padding=22,
@@ -353,7 +416,7 @@ def main(page: ft.Page):
         on_click=start_conversion
     )
 
-    # 5. Terminal / Logs Console (The "Cool" Feature)
+    # 5. Terminal / Logs Console
     terminal_list = ft.ListView(
         expand=True,
         spacing=2,
@@ -411,8 +474,7 @@ def main(page: ft.Page):
                 )
             )
         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-        # FIX: Hardcoded ARGB Hex for opacity (10% of #10B981) -> #1A10B981
-        bgcolor="#1A10B981",
+        bgcolor="#1A10B981", # Note: 8-digit hex for transparency
         border=ft.border.all(1, COLOR_SUCCESS),
         border_radius=12,
         padding=25,
@@ -422,7 +484,6 @@ def main(page: ft.Page):
 
     # --- MAIN LAYOUT ASSEMBLY ---
 
-    # Glassmorphism Card
     main_card = ft.Container(
         content=ft.Column(
             [
@@ -443,8 +504,7 @@ def main(page: ft.Page):
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             scroll=ft.ScrollMode.HIDDEN
         ),
-        # FIX: Hardcoded ARGB Hex for opacity (85% of #1E293B) -> #D91E293B
-        bgcolor="#D91E293B",
+        bgcolor="#D91E293B", # Note: 8-digit hex for transparency
         blur=ft.Blur(10, 10, ft.BlurTileMode.MIRROR),
         padding=40,
         border_radius=20,
@@ -467,7 +527,6 @@ def main(page: ft.Page):
             bgcolor=COLOR_BG_PAGE
         )
     )
-
 
 if __name__ == '__main__':
     ft.app(target=main)

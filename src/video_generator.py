@@ -187,6 +187,7 @@ def _fit_text_to_box(draw: ImageDraw.ImageDraw, text: str, font_path: Optional[s
                      box_height: int) -> ImageFont.FreeTypeFont:
     """
     Adjusts font size to fit within the given box dimensions and returns the font.
+    FIXED: Uses textbbox instead of deprecated textsize
     """
     # Initial font size guess (reasonable value based on screen height)
     font_size = 48
@@ -211,7 +212,7 @@ def _fit_text_to_box(draw: ImageDraw.ImageDraw, text: str, font_path: Optional[s
             pass
         return ImageFont.load_default()
 
-    # Function to wrap text
+    # Function to wrap text - FIXED to use textbbox
     def wrap_text(text_value: str, font_obj: ImageFont.FreeTypeFont, max_width: int) -> str:
         wrapped_lines = []
         for paragraph in text_value.splitlines():
@@ -222,7 +223,9 @@ def _fit_text_to_box(draw: ImageDraw.ImageDraw, text: str, font_path: Optional[s
             current = []
             for w in words:
                 test = (" ".join(current + [w])).strip()
-                w_width, _ = draw.textsize(test, font=font_obj)
+                # FIXED: Use textbbox instead of textsize
+                bbox = draw.textbbox((0, 0), test, font=font_obj)
+                w_width = bbox[2] - bbox[0]
                 if w_width <= max_width or not current:
                     current.append(w)
                 else:
@@ -236,7 +239,10 @@ def _fit_text_to_box(draw: ImageDraw.ImageDraw, text: str, font_path: Optional[s
     for size in range(font_size, 12, -2):
         font = load_font(size)
         wrapped = wrap_text(text, font, box_width)
-        w, h = draw.multiline_textsize(wrapped, font=font, spacing=8)
+        # FIXED: Use textbbox for multiline text
+        bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=8)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
         if w <= box_width and h <= box_height:
             return font
     return load_font(12)
@@ -245,6 +251,7 @@ def _fit_text_to_box(draw: ImageDraw.ImageDraw, text: str, font_path: Optional[s
 def create_overlay_image(base_image_path: str, text: str, output_path: str) -> str:
     """
     Overlays the translated text legibly on the bottom part of the slide image.
+    FIXED: Uses textbbox instead of deprecated textsize
     """
     image = Image.open(base_image_path).convert("RGB")
     draw = ImageDraw.Draw(image)
@@ -271,7 +278,7 @@ def create_overlay_image(base_image_path: str, text: str, output_path: str) -> s
     # Font setting and text wrapping
     font = _fit_text_to_box(draw, text, font_path=None, box_width=box_width - margin, box_height=box_height - margin)
 
-    # Re-wrap text and measure
+    # Re-wrap text and measure - FIXED to use textbbox
     def wrap_with_font(text_value: str, font_obj: ImageFont.FreeTypeFont, max_width: int) -> str:
         wrapped_lines = []
         for paragraph in text_value.splitlines():
@@ -282,7 +289,9 @@ def create_overlay_image(base_image_path: str, text: str, output_path: str) -> s
             current = []
             for w in words:
                 test = (" ".join(current + [w])).strip()
-                w_width, _ = draw.textsize(test, font=font_obj)
+                # FIXED: Use textbbox instead of textsize
+                bbox = draw.textbbox((0, 0), test, font=font_obj)
+                w_width = bbox[2] - bbox[0]
                 if w_width <= max_width or not current:
                     current.append(w)
                 else:
@@ -293,7 +302,10 @@ def create_overlay_image(base_image_path: str, text: str, output_path: str) -> s
         return "\n".join(wrapped_lines)
 
     wrapped_text = wrap_with_font(text, font, box_width - margin)
-    text_w, text_h = draw.multiline_textsize(wrapped_text, font=font, spacing=8)
+    # FIXED: Use multiline_textbbox instead of multiline_textsize
+    bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, spacing=8)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
 
     # Center text in box (horizontal), with some top padding
     text_x = box_left + (box_width - text_w) // 2
