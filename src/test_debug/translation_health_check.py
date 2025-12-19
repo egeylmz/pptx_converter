@@ -67,7 +67,7 @@ def test_deepl_api_key():
 
     api_key = (
         os.environ.get("DEEPL_API_KEY")
-        or (open("deepl_config.txt").read().strip() if os.path.exists("deepl_config.txt") else None)
+        or (open("../deepl_config.txt").read().strip() if os.path.exists("../deepl_config.txt") else None)
     )
 
     if api_key:
