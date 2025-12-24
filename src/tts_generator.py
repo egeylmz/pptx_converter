@@ -4,6 +4,7 @@ import os
 import json
 from pathlib import Path
 import re
+from google.cloud import texttospeech
 
 
 def get_language_code_for_tts(lang_code: str) -> str:
@@ -44,70 +45,108 @@ def get_language_code_for_tts(lang_code: str) -> str:
     return result
 
 
-def generate_audio_for_text(text: str, lang_code: str, output_path: str) -> float:
+def generate_cloud_tts_audio(
+    text: str,
+    lang_code: str,
+    output_path: str,
+    speaking_rate: float = 1.0
+) -> float:
     """
-    Converts the given text to an audio file using TTS.
-
-    IMPROVED: Better error handling and duration calculation
-
-    Args:
-        text: Text to convert (SHOULD BE TRANSLATED AI NARRATION)
-        lang_code: Language code (e.g., 'en', 'tr', 'zh-CN')
-        output_path: Output file path (.mp3)
+    Generate audio using Google Cloud Text-to-Speech.
 
     Returns:
-        Duration of the audio file (in seconds)
+        Duration in seconds
     """
+    client = texttospeech.TextToSpeechClient()
+
+    tts_lang = get_language_code_for_tts(lang_code)
+
+    synthesis_input = texttospeech.SynthesisInput(text=text)
+
+    voice = texttospeech.VoiceSelectionParams(
+        language_code=tts_lang,
+        ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
+    )
+
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.MP3,
+        speaking_rate=speaking_rate
+    )
+
+    response = client.synthesize_speech(
+        input=synthesis_input,
+        voice=voice,
+        audio_config=audio_config
+    )
+
+    with open(output_path, "wb") as out:
+        out.write(response.audio_content)
+
+    # Read duration
+    try:
+        from moviepy.editor import AudioFileClip
+        audio = AudioFileClip(output_path)
+        duration = audio.duration
+        audio.close()
+        return duration
+    except Exception:
+        # fallback estimation
+        word_count = len(text.split())
+        return max(word_count / 2.3, 2.0)
+
+def generate_audio_for_text(
+    text: str,
+    lang_code: str,
+    output_path: str,
+    speaking_rate: float = 1.0
+) -> float:
+    """
+    Converts text to audio using:
+    1. Google Cloud TTS (primary)
+    2. gTTS (fallback)
+    """
+
     if not text or not text.strip():
-        # Create minimal silent audio for empty text
         with open(output_path, 'wb') as f:
             f.write(b'')
-        return 2.0  # Minimum 2 seconds for empty slides
+        return 2.0
 
+    # --- PRIMARY: Google Cloud TTS ---
+    try:
+        print("Using Google Cloud TTS")
+        return generate_cloud_tts_audio(
+            text=text,
+            lang_code=lang_code,
+            output_path=output_path,
+            speaking_rate=speaking_rate
+        )
+    except Exception as cloud_error:
+        print(f"⚠️  Cloud TTS failed: {cloud_error}")
+        print("🔁 Falling back to gTTS...")
+
+    # --- FALLBACK: gTTS (existing logic) ---
     try:
         tts_lang = get_language_code_for_tts(lang_code)
 
-        # Create TTS object with error checking
         try:
             tts = gTTS(text=text, lang=tts_lang, slow=False, lang_check=True)
-        except ValueError as ve:
-            print(f"⚠️  Language '{tts_lang}' not supported by gTTS: {ve}")
-            print(f"   Falling back to English...")
+        except ValueError:
+            print(f"⚠️  gTTS language '{tts_lang}' not supported, falling back to English")
             tts = gTTS(text=text, lang='en', slow=False)
 
         tts.save(output_path)
 
-        # Get actual duration
-        try:
-            from moviepy.editor import AudioFileClip
-            audio = AudioFileClip(output_path)
-            actual_duration = audio.duration
-            audio.close()
-            return actual_duration
-        except Exception as e:
-            print(f"⚠️  Could not read audio duration: {str(e)}")
-            # Improved fallback calculation
-            # Average: ~140 words/min for most languages, ~2.3 words/sec
-            word_count = len(text.split())
-
-            # Adjust for language (some languages speak slower)
-            lang_speed_multiplier = {
-                'ja': 1.3,  # Japanese slower
-                'ko': 1.3,  # Korean slower
-                'zh-CN': 1.2,  # Chinese slower
-                'zh-TW': 1.2,
-                'ru': 1.1,  # Russian slightly slower
-            }.get(tts_lang, 1.0)
-
-            estimated_duration = (word_count / 2.3) * lang_speed_multiplier
-            return max(estimated_duration, 2.0)  # At least 2 seconds
+        from moviepy.editor import AudioFileClip
+        audio = AudioFileClip(output_path)
+        duration = audio.duration
+        audio.close()
+        return duration
 
     except Exception as e:
-        print(f"❌ TTS error: {str(e)}")
-        # Create empty file on error
+        print(f"❌ TTS failed completely: {e}")
         with open(output_path, 'wb') as f:
             f.write(b'')
-        return 3.0  # Default 3 seconds on error
+        return 3.0
 
 
 def generate_audio_for_json(json_file_path: str, progress_callback=None) -> str:
@@ -198,7 +237,7 @@ def generate_audio_for_json(json_file_path: str, progress_callback=None) -> str:
 
         # Create audio file with TTS
         try:
-            duration = generate_audio_for_text(cleaned_text, target_lang, audio_path)
+            duration = generate_audio_for_text(cleaned_text, target_lang, audio_path, speaking_rate=1.05)
 
             # Verify file was created
             if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
