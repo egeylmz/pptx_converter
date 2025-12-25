@@ -103,12 +103,15 @@ def export_slides_to_images(pptx_file_path: str, output_dir: str, progress_callb
 def create_slide_video(image_path: str, audio_path: Optional[str], duration: float) -> ImageClip:
     """Creates a video clip from an image and audio file."""
     actual_duration = duration
-    if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+
+    # CRITICAL FIX: Check if file size > 100 bytes to avoid crashing on empty/corrupt audio files
+    if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 100:
         try:
             audio = AudioFileClip(audio_path)
             actual_duration = audio.duration
             audio.close()
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ Could not load audio {os.path.basename(audio_path)}: {e}")
             actual_duration = max(duration, 3.0)
     else:
         actual_duration = max(duration, 3.0)
@@ -118,7 +121,8 @@ def create_slide_video(image_path: str, audio_path: Optional[str], duration: flo
     video = video.set_fps(24)
     video = video.resize(newsize=(1920, 1080))
 
-    if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+    # Re-check audio validity before setting it
+    if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 100:
         try:
             audio = AudioFileClip(audio_path)
             video = video.set_audio(audio)

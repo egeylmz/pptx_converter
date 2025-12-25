@@ -1,36 +1,37 @@
-PyQt5==5.15.10
-# === CORE REQUIREMENTS ===
-
-# UI Framework
+# === CORE UI ===
 flet>=0.23.0
 
-# PowerPoint Processing
+# === POWERPOINT PROCESSING ===
 python-pptx>=0.6.23
 
-# Image Processing
+# === IMAGE & VIDEO PROCESSING ===
 Pillow>=10.2.0
-
-# Video Processing
+# moviepy 1.0.3 is STABLE. Do not upgrade to 2.0+ yet as it breaks some audio logic.
 moviepy==1.0.3
 imageio==2.31.1
 imageio-ffmpeg>=0.4.9
 
-# Text-to-Speech
-gtts>=2.5.1
+# === TEXT-TO-SPEECH (TTS) ===
+gTTS>=2.5.1
+# CRITICAL: Added for the Premium Cloud TTS feature we just built
+google-cloud-texttospeech>=2.14.1
 
-# === AI NARRATION (Google Gemini - FREE!) ===
+# === AI NARRATION (Google Gemini) ===
+# This supports the "NEW" SDK code we fixed
 google-genai>=0.3.0
+# This supports the "OLD" SDK fallback (good to keep both for stability)
+google-generativeai>=0.8.3
 
 # === TRANSLATION ===
 deep-translator>=1.11.4
+# Optional fallback, but good to have
 googletrans==4.0.0rc1
+# Premium translation (optional, but code supports it)
+deepl>=1.16.1
 
-# === WINDOWS ONLY ===
-# For .ppt file conversion (uncomment if on Windows)
-# pywin32>=305
+# === UTILITIES ===
+python-dotenv>=1.0.0
 
-# === OPTIONAL: Alternative AI Services ===
-# Only install these if you want alternatives to Gemini
-# openai>=1.0.0           # OpenAI GPT-4 (paid)
-# anthropic>=0.18.0       # Anthropic Claude (paid)
-# ollama>=0.1.0           # Local AI (free, runs on your PC)
+# === WINDOWS SPECIFIC ===
+# Required for .ppt -> .pptx conversion and COM automation
+pywin32>=306

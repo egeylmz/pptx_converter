@@ -5,17 +5,15 @@ from datetime import datetime
 import threading
 import platform
 
-# --- NEW: Import dotenv to load environment variables globally ---
+# Load .env ONCE at the very beginning
 from dotenv import load_dotenv
 
-# Load the .env file immediately so all modules (Cloud TTS, Gemini, etc.) can see the keys
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
-# ---------------------------------------------------------------
 
 import flet as ft
 
 if platform.system() != 'Windows':
-    print("⚠️  WARNING: This application requires Windows")
+    print("⚠️ WARNING: This application requires Windows")
     sys.exit(1)
 
 if sys.platform == 'win32':
@@ -97,7 +95,7 @@ def main(page: ft.Page):
     page.title = "Presentation to Lecture"
     page.padding = 0
     page.window_width = 1100
-    page.window_height = 950  # Slightly taller for new dropdown
+    page.window_height = 950
     page.theme_mode = ft.ThemeMode.DARK
     page.bgcolor = "#0F172A"
     page.fonts = {
@@ -125,7 +123,6 @@ def main(page: ft.Page):
         'Korean': 'ko', 'Chinese (Simplified)': 'zh-CN'
     }
 
-    # Load narration styles
     narration_styles = get_available_styles()
 
     def add_log(message, color=COLOR_TEXT_SUB):
@@ -179,12 +176,12 @@ def main(page: ft.Page):
         result_container.update()
         lang_dropdown.value = "English"
         style_dropdown.value = "engaging"
-        enrichment_dropdown.value = "none"  # Reset enrichment level
+        enrichment_dropdown.value = "none"
         voice_quality_dropdown.value = "cloud" if CLOUD_TTS_AVAILABLE else "gtts"
         voice_gender_dropdown.value = "MALE"
         lang_dropdown.update()
         style_dropdown.update()
-        enrichment_dropdown.update()  # Update enrichment dropdown
+        enrichment_dropdown.update()
         voice_quality_dropdown.update()
         voice_gender_dropdown.update()
         page.update()
@@ -257,7 +254,8 @@ def main(page: ft.Page):
             return
 
         lang_code = language_map[lang_dropdown.value]
-        narration_style = style_dropdown.value  # Get selected style
+        narration_style = style_dropdown.value
+        enrichment_level = enrichment_dropdown.value
 
         convert_btn.disabled = True
         convert_btn.content.controls[1].value = "PROCESSING..."
@@ -269,20 +267,21 @@ def main(page: ft.Page):
 
         try:
             # 1. Extract
-            add_log('Reading PowerPoint data...', COLOR_ACCENT)
+            add_log('📖 Reading PowerPoint data...', COLOR_ACCENT)
             slides_data = extract_text_from_pptx(selected_file["path"])
-            add_log(f"Extracted text from {len(slides_data)} slides.")
+            add_log(f"✓ Extracted text from {len(slides_data)} slides.", COLOR_SUCCESS)
 
             # 2. AI Narration with selected style (ALWAYS run)
             style_name = narration_styles[narration_style]['name']
             add_log(f'🤖 Generating AI narration ({style_name})...', COLOR_ACCENT)
+
+            if enrichment_level != "none":
+                add_log(f"🔬 Content enrichment: {enrichment_level}", COLOR_ACCENT)
+
             try:
-                # Get temperature from style config
                 style_temp = narration_styles[narration_style]['temperature']
-                enrichment_level = enrichment_dropdown.value  # Get selected enrichment level
-                add_log(f"Enrichment level: {enrichment_level}", COLOR_ACCENT)
                 narrator = AITeacherNarrator(
-                    temperature=style_temp, 
+                    temperature=style_temp,
                     style=narration_style,
                     enrichment_level=enrichment_level
                 )
@@ -299,9 +298,14 @@ def main(page: ft.Page):
 
             # 3. Translation
             if TRANSLATOR_AVAILABLE and lang_code != 'en':
-                add_log(f'Translating to {lang_code}...', COLOR_ACCENT)
+                add_log(f'🌐 Translating to {lang_code}...', COLOR_ACCENT)
+
+                # FIXED: Use enriched text if available, otherwise AI narration
                 for slide in slides_data:
-                    slide['text'] = slide.get('ai_narration', slide.get('text', ''))
+                    slide['text'] = slide.get('enriched_text',
+                                              slide.get('ai_narration',
+                                                        slide.get('text', '')))
+
                 try:
                     translated_slides = translate_texts(slides_data, lang_code,
                                                         progress_callback=lambda msg: add_log(msg))
@@ -309,13 +313,17 @@ def main(page: ft.Page):
                     add_log(f"⚠ Translation failed: {str(e)}", COLOR_ERROR)
                     translated_slides = slides_data
                     for slide in translated_slides:
-                        slide['translated_text'] = slide.get('ai_narration', slide.get('text', ''))
+                        slide['translated_text'] = slide.get('enriched_text',
+                                                             slide.get('ai_narration',
+                                                                       slide.get('text', '')))
             else:
                 translated_slides = slides_data
                 for slide in translated_slides:
-                    slide['translated_text'] = slide.get('ai_narration', slide.get('text', ''))
+                    slide['translated_text'] = slide.get('enriched_text',
+                                                         slide.get('ai_narration',
+                                                                   slide.get('text', '')))
                 if lang_code == 'en':
-                    add_log("Target language is English, using narration directly.", COLOR_SUCCESS)
+                    add_log("✓ Target language is English, using narration directly.", COLOR_SUCCESS)
 
             # 4. Validate
             for idx, slide in enumerate(translated_slides):
@@ -335,6 +343,7 @@ def main(page: ft.Page):
                 "source_file": os.path.basename(selected_file["path"]),
                 "target_language": lang_code,
                 "narration_style": narration_style,
+                "enrichment_level": enrichment_level,
                 "translation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "total_slides": len(translated_slides),
                 "slides": [
@@ -342,12 +351,9 @@ def main(page: ft.Page):
                         "slide_number": slide.get("slide_number"),
                         "original_text": slide.get("original_text", slide.get("text", "")),
                         "ai_narration": slide.get("ai_narration", ""),
+                        "enriched_text": slide.get("enriched_text", ""),
                         "translated_text": slide.get("translated_text", ""),
-
-                        # --- THIS IS THE FIX ---
                         "translated_blocks": slide.get("translated_blocks", []),
-                        # -----------------------
-
                         "audio_file": None,
                         "duration": None
                     }
@@ -357,7 +363,7 @@ def main(page: ft.Page):
 
             with open(json_filepath, 'w', encoding='utf-8') as f:
                 json.dump(output_data, f, ensure_ascii=False, indent=2)
-            add_log(f"Data saved to {json_filename}")
+            add_log(f"✓ Data saved to {json_filename}", COLOR_SUCCESS)
 
             # 6. TTS & Video
             use_cloud_tts = voice_quality_dropdown.value == "cloud" and CLOUD_TTS_AVAILABLE
@@ -378,13 +384,13 @@ def main(page: ft.Page):
                         progress_callback=lambda msg: add_log(msg)
                     )
             else:
-                add_log('Starting Audio Generation (gTTS - Free)...', COLOR_ACCENT)
+                add_log('🎙️ Starting Audio Generation (gTTS - Free)...', COLOR_ACCENT)
                 audio_json_path = generate_audio_for_json(
                     json_filepath,
                     progress_callback=lambda msg: add_log(msg)
                 )
 
-            add_log('Rendering Video (FFmpeg)...', COLOR_ACCENT)
+            add_log('🎬 Rendering Video (FFmpeg)...', COLOR_ACCENT)
             video_path = create_video_from_json(audio_json_path, selected_file["path"],
                                                 progress_callback=lambda msg: add_log(msg))
 
@@ -392,11 +398,11 @@ def main(page: ft.Page):
             if selected_file["converted_pptx"]:
                 try:
                     os.remove(selected_file["converted_pptx"])
-                    add_log("Cleaned up temporary .ppt conversion file", COLOR_TEXT_SUB)
+                    add_log("🧹 Cleaned up temporary .ppt conversion file", COLOR_TEXT_SUB)
                 except:
                     pass
 
-            update_status("Task Complete!", "success")
+            update_status("✅ Task Complete!", "success")
             result_filename.value = os.path.basename(video_path)
             result_path.value = video_path
             result_container.visible = True
@@ -409,7 +415,7 @@ def main(page: ft.Page):
         except Exception as e:
             import traceback
             traceback.print_exc()
-            update_status(f"Critical Error: {str(e)}", "error")
+            update_status(f"❌ Critical Error: {str(e)}", "error")
             add_log(str(e), COLOR_ERROR)
             convert_btn.disabled = False
             convert_btn.content.controls[1].value = "RETRY"
@@ -458,7 +464,6 @@ def main(page: ft.Page):
         height=200, width=550, alignment=ft.alignment.center
     )
 
-    # Narration Style Dropdown
     style_options = []
     for key, config in narration_styles.items():
         style_options.append(
@@ -482,7 +487,6 @@ def main(page: ft.Page):
         text_size=14
     )
 
-    # Content Enrichment Level Dropdown (NEW)
     enrichment_options = []
     for key, config in ENRICHMENT_LEVELS.items():
         enrichment_options.append(
@@ -496,7 +500,7 @@ def main(page: ft.Page):
         label="Content Enrichment Level",
         hint_text="Add extra information to narrations",
         options=enrichment_options,
-        value="none",  # User chooses enrichment level
+        value="none",
         width=550,
         bgcolor="#0F172A",
         border_color="#334155",
@@ -506,7 +510,6 @@ def main(page: ft.Page):
         text_size=14
     )
 
-    # Voice Quality Dropdown (NEW)
     voice_quality_dropdown = ft.Dropdown(
         label="Voice Quality",
         hint_text="Choose TTS engine",
@@ -522,10 +525,9 @@ def main(page: ft.Page):
         focused_border_color=COLOR_PRIMARY,
         content_padding=18,
         text_size=14,
-        disabled=not CLOUD_TTS_AVAILABLE  # Disable if Cloud TTS not available
+        disabled=not CLOUD_TTS_AVAILABLE
     )
 
-    # Voice Gender Dropdown (for Cloud TTS)
     voice_gender_dropdown = ft.Dropdown(
         label="Voice Gender (Cloud TTS only)",
         options=[
@@ -616,15 +618,15 @@ def main(page: ft.Page):
             ft.Divider(height=20, color="transparent"),
             upload_container,
             ft.Divider(height=20, color="transparent"),
-            style_dropdown,  # Narration style
+            style_dropdown,
             ft.Divider(height=10, color="transparent"),
-            enrichment_dropdown,  # NEW: Content enrichment level
+            enrichment_dropdown,
             ft.Divider(height=10, color="transparent"),
-            voice_quality_dropdown,  # TTS engine selection
+            voice_quality_dropdown,
             ft.Divider(height=10, color="transparent"),
-            voice_gender_dropdown,  # Voice gender
+            voice_gender_dropdown,
             ft.Divider(height=10, color="transparent"),
-            lang_dropdown,  # Target language
+            lang_dropdown,
             ft.Divider(height=10, color="transparent"),
             convert_btn,
             ft.Divider(height=20, color="transparent"),
