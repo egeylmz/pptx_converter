@@ -103,31 +103,32 @@ def export_slides_to_images(pptx_file_path: str, output_dir: str, progress_callb
 def create_slide_video(image_path: str, audio_path: Optional[str], duration: float) -> ImageClip:
     """Creates a video clip from an image and audio file."""
     actual_duration = duration
+    audio_clip = None
 
-    # CRITICAL FIX: Check if file size > 100 bytes to avoid crashing on empty/corrupt audio files
+    # Check if audio file is valid
     if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 100:
         try:
-            audio = AudioFileClip(audio_path)
-            actual_duration = audio.duration
-            audio.close()
+            audio_clip = AudioFileClip(audio_path)
+            actual_duration = audio_clip.duration
+            print(f"✓ Audio loaded: {os.path.basename(audio_path)} ({actual_duration:.2f}s)")
         except Exception as e:
             print(f"⚠️ Could not load audio {os.path.basename(audio_path)}: {e}")
             actual_duration = max(duration, 3.0)
+            audio_clip = None
     else:
         actual_duration = max(duration, 3.0)
+        if audio_path:
+            print(f"⚠️ Audio file missing or empty: {audio_path}")
 
     video = ImageClip(image_path)
     video = video.set_duration(actual_duration)
     video = video.set_fps(24)
     video = video.resize(newsize=(1920, 1080))
 
-    # Re-check audio validity before setting it
-    if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 100:
-        try:
-            audio = AudioFileClip(audio_path)
-            video = video.set_audio(audio)
-        except Exception:
-            pass
+    # Attach audio to video clip
+    if audio_clip is not None:
+        video = video.set_audio(audio_clip)
+        print(f"✓ Audio attached to slide")
 
     return video
 
@@ -163,6 +164,8 @@ def create_video_from_json(json_file_path: str, pptx_file_path: str, progress_ca
             image_path = image_paths[slide_number - 1] if slide_number <= len(image_paths) else image_paths[0]
 
         if os.path.exists(image_path):
+            if progress_callback:
+                progress_callback(f'Creating clip for slide {idx}/{len(slides)}...')
             clip = create_slide_video(image_path, audio_file, duration)
             video_clips.append(clip)
 
@@ -170,10 +173,13 @@ def create_video_from_json(json_file_path: str, pptx_file_path: str, progress_ca
         raise Exception("No video clips created!")
 
     if progress_callback:
-        progress_callback('Merging video clips...')
+        progress_callback(f'Merging {len(video_clips)} video clips...')
 
     final_video = concatenate_videoclips(video_clips, method="compose")
     output_video_path = json_file_path.replace('.json', '').replace('_with_audio', '') + '_video.mp4'
+
+    if progress_callback:
+        progress_callback(f'Encoding final video (this may take a while)...')
 
     final_video.write_videofile(
         output_video_path,
@@ -182,7 +188,7 @@ def create_video_from_json(json_file_path: str, pptx_file_path: str, progress_ca
         audio_codec='aac',
         preset='medium',
         threads=4,
-        logger=None
+        logger='bar'  # Show progress bar in terminal
     )
 
     for clip in video_clips:

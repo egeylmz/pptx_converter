@@ -29,8 +29,9 @@ try:
     from googletrans import Translator
     GOOGLETRANS_AVAILABLE = True
     print("✓ googletrans loaded (fallback)")
-except ImportError:
-    print("✗ googletrans not installed")
+except (ImportError, AttributeError) as e:
+    # googletrans has compatibility issues with newer httpcore versions
+    print(f"✗ googletrans not available (compatibility issue: {type(e).__name__})")
 
 
 def get_deepl_api_key():

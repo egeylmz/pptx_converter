@@ -4,7 +4,16 @@ import os
 import json
 from pathlib import Path
 import re
-from google.cloud import texttospeech
+
+# Google Cloud TTS is optional - fallback to gTTS if not available
+CLOUD_TTS_AVAILABLE = False
+try:
+    from google.cloud import texttospeech
+    CLOUD_TTS_AVAILABLE = True
+    print("✓ Google Cloud TTS available")
+except ImportError:
+    print("⚠ Google Cloud TTS not installed, using gTTS only")
+    texttospeech = None
 
 
 def get_language_code_for_tts(lang_code: str) -> str:
@@ -57,6 +66,9 @@ def generate_cloud_tts_audio(
     Returns:
         Duration in seconds
     """
+    if not CLOUD_TTS_AVAILABLE or texttospeech is None:
+        raise ImportError("Google Cloud TTS not available")
+    
     client = texttospeech.TextToSpeechClient()
 
     tts_lang = get_language_code_for_tts(lang_code)

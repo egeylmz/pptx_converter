@@ -70,13 +70,22 @@ except ImportError as e:
 
 
     def get_available_styles():
-        return {"engaging": {"name": "Engaging", "description": "Default"}}
+        return {"engaging": {"name": "Engaging", "description": "Default", "temperature": 0.7}}
 
 
     class AITeacherNarrator:
         def __init__(self, *args, **kwargs): pass
 
         def narrate_slides(self, *args, **kwargs): return []
+
+    # Fallback ENRICHMENT_LEVELS when enrichment_config is not available
+    ENRICHMENT_LEVELS = {
+        "none": {"name": "None", "description": "No enrichment"},
+        "minimal": {"name": "Minimal", "description": "Basic enrichment"},
+        "normal": {"name": "Normal", "description": "Standard enrichment"},
+        "detailed": {"name": "Detailed", "description": "Detailed enrichment"},
+        "academic": {"name": "Academic", "description": "Academic enrichment"}
+    }
 
 TRANSLATOR_AVAILABLE = False
 try:
@@ -402,15 +411,38 @@ def main(page: ft.Page):
                 except:
                     pass
 
+            # 8. Show success and update UI
+            add_log(f"🎉 VIDEO GENERATED: {os.path.basename(video_path)}", COLOR_SUCCESS)
             update_status("✅ Task Complete!", "success")
             result_filename.value = os.path.basename(video_path)
             result_path.value = video_path
             result_container.visible = True
-            result_container.update()
             convert_btn.disabled = False
             convert_btn.content.controls[1].value = "NEW CONVERSION"
             convert_btn.content.controls[0].name = ft.Icons.REFRESH
+            
+            # Force full UI refresh
+            result_container.update()
             convert_btn.update()
+            terminal_container.update()
+            page.update()
+            
+            # 9. Show notification snackbar
+            page.snack_bar = ft.SnackBar(
+                content=ft.Text(f"✅ Video generated successfully!", color="white", weight=ft.FontWeight.BOLD),
+                bgcolor=COLOR_SUCCESS,
+                duration=5000
+            )
+            page.snack_bar.open = True
+            page.update()
+            
+            # 10. Auto-open the video file
+            try:
+                import subprocess
+                subprocess.Popen(['explorer', '/select,', video_path])
+                add_log("📂 Opened output folder", COLOR_TEXT_SUB)
+            except Exception as open_error:
+                add_log(f"⚠ Could not open folder: {open_error}", COLOR_WARNING)
 
         except Exception as e:
             import traceback
@@ -420,6 +452,7 @@ def main(page: ft.Page):
             convert_btn.disabled = False
             convert_btn.content.controls[1].value = "RETRY"
             convert_btn.update()
+            page.update()  # Force UI refresh from background thread
 
     def start_conversion(e):
         button_text = convert_btn.content.controls[1].value
